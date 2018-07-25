@@ -1,0 +1,1 @@
+python GPTransitDetrend.py -ofolder ofolder -compfile comps.dat -lcfile lc.dat -eparamfile eparams.dat -eparamtouse 0,1,5 -ldlaw linear -Pmean 14.8931936348 -Psd 0.0000348136 -amean 23.8119479042 -asd 0.3148965321 -pmean 0.0802479275 -psd 0.01 -bmean 0.1 -bsd 0.1 -t0mean 2458001.7204705207 -t0sd 0.0002596276 --circular

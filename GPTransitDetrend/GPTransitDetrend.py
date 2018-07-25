@@ -72,6 +72,8 @@ parser.set_defaults(circular=False)
 parser.add_argument('-nlive', default=1000)
 args = parser.parse_args()
 
+# Is it a circular fit?
+circular = args.circular
 # Extract lightcurve and external parameters. When importing external parameters, 
 # standarize them and save them on the matrix X:
 lcfilename = args.lcfile
@@ -116,42 +118,38 @@ ld_law = args.ldlaw
 # Transit parameter priors if any:
 t0mean = args.t0mean
 if t0mean is not None:
-    t0sd = args.t0sd
+    t0mean = np.double(t0mean)
+    t0sd = np.double(args.t0sd)
 
 Pmean = args.Pmean
 if Pmean is not None:
-    Psd = args.Psd
+    Pmean = np.double(Pmean)
+    Psd = np.double(args.Psd)
 
 pmean = args.pmean
 if pmean is not None:
-    psd = args.psd
+    pmean = np.double(pmean)
+    psd = np.double(args.psd)
 
 amean = args.amean
 if amean is not None:
-    asd = args.asd
+    amean = np.double(amean)
+    asd = np.double(args.asd)
 
 bmean = args.bmean
 if bmean is not None:
-    bsd = args.bsd
+    bmean = np.double(bmean)
+    bsd = np.double(args.bsd)
 
 if not circular:
     eccmean = args.eccmean
-    eccsd = args.eccsd
     omegamean = args.omegamean
-    omegasd = args.omegasd
-    if eccmean is None:
-        print '\t ERROR: if not applying --circular, you must define -eccmean'
-        sys.exit()
-    if eccsd is None:
-        print '\t ERROR: if not applying --circular, you must define -eccsd'
-        sys.exit()
-    if omegamean is None:
-        print '\t ERROR: if not applying --circular, you must define -omegamean'
-        sys.exit()
-    if omegasd is None:
-        print '\t ERROR: if not applying --circular, you must define -omegasd'
-        sys.exit()
-
+    if eccmean is not None:
+        eccmean = np.double(args.eccmean)
+        eccsd = np.double(args.eccsd)
+    if omegamean is not None:
+        omegamean = np.double(args.omegamean)
+        omegasd = np.double(args.omegasd)
 # Other inputs:
 n_live_points = int(args.nlive)
 
@@ -316,7 +314,7 @@ def loglike(cube, ndim, nparams):
 
     inc_inv_factor = (b/a)*ecc_factor
     # Check that b and b/aR are in physically meaningful ranges:
-    if b>1.+rp or inc_inv_factor >=1.:
+    if b>1.+p or inc_inv_factor >=1.:
         lcmodel = np.ones(len(t))
     else:
         # Compute inclination of the orbit:
@@ -344,13 +342,13 @@ def loglike(cube, ndim, nparams):
         alphas[i] = cube[pcounter]
         pcounter = pcounter + 1
     gp_vector = np.append(np.append(ljitter,np.log(max_var)),np.log(1./alphas))
-    
     # Evaluate model:     
     residuals = f - model
     gp.set_parameter_vector(gp_vector)
     return gp.log_likelihood(residuals)
 
-n_params = 7 + X.shape[0]
+#              v neparams   v max variance
+n_params = 8 + X.shape[0] + 1
 if compfilename is not None:
     n_params +=  Xc.shape[0]
 if ld_law != 'linear':
@@ -358,6 +356,9 @@ if ld_law != 'linear':
 if not circular:
     n_params += 2
 
+print 'Number of external parameters:',X.shape[0]
+print 'Number of comparison stars:',Xc.shape[0]
+print 'Number of counted parameters:',n_params
 out_file = out_folder+'out_multinest_trend_george_'
 
 import pickle
@@ -368,56 +369,129 @@ if not os.path.exists(out_folder+'posteriors_trend_george.pkl'):
     # Get output:
     output = pymultinest.Analyzer(outputfiles_basename=out_file, n_params = n_params)
     # Get out parameters: this matrix has (samples,n_params+1):
-    mc_samples = output.get_equal_weighted_posterior()[:,:-1]
+    posterior_samples = output.get_equal_weighted_posterior()[:,:-1]
+    # Extract parameters:
+    mmean, ljitter,t0, P, p, a, b, q1  = posterior_samples[:,0],posterior_samples[:,1],posterior_samples[:,2],posterior_samples[:,3],\
+                                         posterior_samples[:,4],posterior_samples[:,5],posterior_samples[:,6],posterior_samples[:,7]
+
     a_lnZ = output.get_stats()['global evidence']
     out = {}
-    out['posterior_samples'] = mc_samples
+    out['posterior_samples'] = {}
+    out['posterior_samples']['unnamed'] = posterior_samples
+    out['posterior_samples']['mmean'] = mmean
+    out['posterior_samples']['ljitter'] = ljitter
+    out['posterior_samples']['t0'] = t0
+    out['posterior_samples']['P'] = P
+    out['posterior_samples']['p'] = p
+    out['posterior_samples']['a'] = a
+    out['posterior_samples']['b'] = b
+    out['posterior_samples']['q1'] = q1
+
+    pcounter = 8
+    if ld_law != 'linear':
+        q2 = posterior_samples[:,pcounter]
+        out['posterior_samples']['q2'] = q2
+        pcounter += 1
+
+    if not circular:
+        ecc = posterior_samples[:,pcounter]
+        out['posterior_samples']['ecc'] = ecc
+        pcounter += 1
+        omega = posterior_samples[:,pcounter]
+        out['posterior_samples']['omega'] = omega
+        pcounter += 1
+
+    xc_coeffs = []
+    if compfilename is not None:
+        for i in range(Xc.shape[0]):
+            xc_coeffs.append(posterior_samples[:,pcounter])
+            out['posterior_samples']['xc'+str(i)] = posterior_samples[:,pcounter]
+            pcounter += 1
+    max_var = posterior_samples[:,pcounter]
+    out['posterior_samples']['max_var'] = max_var
+    pcounter = pcounter + 1
+    alphas = []
+    for i in range(X.shape[0]):
+        alphas.append(posterior_samples[:,pcounter])
+        out['posterior_samples']['alpha'+str(i)] = posterior_samples[:,pcounter]
+        pcounter = pcounter + 1
+
     out['lnZ'] = a_lnZ
     pickle.dump(out,open(out_folder+'posteriors_trend_george.pkl','wb'))
 else:
-    mc_samples = pickle.load(open(out_folder+'posteriors_trend_george.pkl','rb'))['posterior_samples']
-    
+    out = pickle.load(open(out_folder+'posteriors_trend_george.pkl','rb'))
+    posterior_samples = out['posterior_samples']['unnamed']
 
-# Extract posterior parameter vector:
-cube = np.median(mc_samples,axis=0)
-cube_var = np.var(mc_samples,axis=0)
-
-mmean,ljitter = cube[0],cube[1]
-pcounter = 2
-model = mmean
-if compfilename is not None:
-    for i in range(Xc.shape[0]):
-        model = model + cube[pcounter]*Xc[i,idx]
-        pcounter += 1
-max_var = cube[pcounter]
-pcounter = pcounter + 1
+mmean,ljitter = np.median(out['posterior_samples']['mmean']),np.median(out['posterior_samples']['ljitter'])
+max_var = np.median(out['posterior_samples']['max_var'])
 alphas = np.zeros(X.shape[0])
 for i in range(X.shape[0]):
-    alphas[i] = cube[pcounter]
-    pcounter = pcounter + 1
+    alphas[i] = np.median(out['posterior_samples']['alpha'+str(i)])
 gp_vector = np.append(np.append(ljitter,np.log(max_var)),np.log(1./alphas))
 
+# Evaluate LC:
+t0, P, p, a, b, q1 = np.median(out['posterior_samples']['t0']),np.median(out['posterior_samples']['P']),\
+                      np.median(out['posterior_samples']['p']),np.median(out['posterior_samples']['a']),np.median(out['posterior_samples']['b']),\
+                      np.median(out['posterior_samples']['q1'])
+
+if ld_law != 'linear':
+        q2 = np.median(out['posterior_samples']['q1'])
+        coeff1,coeff2 = reverse_ld_coeffs(ld_law,q1,q2)
+        params.u = [coeff1,coeff2]
+else:
+        params.u = [q1]
+
+if not circular:
+        ecc = np.median(out['posterior_samples']['ecc'])
+        omega = np.median(out['posterior_samples']['omega'])
+        ecc_factor = (1. + ecc*np.sin(omega * np.pi/180.))/(1. - ecc**2)
+else:
+        ecc = 0.0
+        omega = 90.
+        ecc_factor = 1.
+
+inc_inv_factor = (b/a)*ecc_factor
+# Check that b and b/aR are in physically meaningful ranges:
+if b>1.+p or inc_inv_factor >=1.:
+        lcmodel = np.ones(len(t))
+else:
+        # Compute inclination of the orbit:
+        inc = np.arccos(inc_inv_factor)*180./np.pi
+
+        # Evaluate transit model:
+        params.t0 = t0
+        params.per = P
+        params.rp = p
+        params.a = a
+        params.inc = inc
+        params.ecc = ecc
+        params.w = omega
+        lcmodel = m.light_curve(params)
+
+model = - 2.51*np.log10(lcmodel)
+comp_model = mmean
+if compfilename is not None:
+    for i in range(Xc.shape[0]):
+        comp_model = comp_model + np.median(out['posterior_samples']['xc'+str(i)])*Xc[i,idx]
 # Evaluate model:     
-residuals = f - model
+residuals = f - model - comp_model
 gp.set_parameter_vector(gp_vector)
 
 # Get prediction from GP:
 pred_mean, pred_var = gp.predict(residuals, X.T, return_var=True)
 pred_std = np.sqrt(pred_var)
 
-model = mmean
-pcounter = 2
-if compfilename is not None:
-    for i in range(Xc.shape[0]):
-        model = model + cube[pcounter]*Xc[i,:]
-        pcounter += 1
+#if compfilename is not None:
+#    for i in range(Xc.shape[0]):
+#        model = model + cube[pcounter]*Xc[i,:]
+#        pcounter += 1
 
-fout,fout_err = exotoolbox.utils.mag_to_flux(fall-model,np.ones(len(tall))*np.sqrt(np.exp(ljitter)))
+fout,fout_err = exotoolbox.utils.mag_to_flux(fall-comp_model,np.ones(len(tall))*np.sqrt(np.exp(ljitter)))
 plt.errorbar(tall - int(tall[0]),fout,yerr=fout_err,fmt='.')
 pred_mean_f,fout_err = exotoolbox.utils.mag_to_flux(pred_mean,np.ones(len(tall))*np.sqrt(np.exp(ljitter)))
 plt.plot(tall - int(tall[0]),pred_mean_f)
 plt.show()
-fall = fall - model - pred_mean
+fall = fall - comp_model - pred_mean
 #plt.errorbar(tall,fall,yerr=np.ones(len(tall))*np.sqrt(np.exp(ljitter)),fmt='.')
 #plt.show()
 plt.errorbar(tall - int(tall[0]),fall,yerr=np.ones(len(tall))*np.sqrt(np.exp(ljitter)),fmt='.')
@@ -425,9 +499,10 @@ plt.show()
 fout,fout_err = exotoolbox.utils.mag_to_flux(fall,np.ones(len(tall))*np.sqrt(np.exp(ljitter)))
 fileout = open('detrended_lc.dat','w')
 for i in range(len(tall)):
-    fileout.write('{0:.10f} {1:.10f} {2:.10f}\n'.format(tall[i],fout[i],fout_err[i]))
+    fileout.write('{0:.10f} {1:.10f} {2:.10f} {3:.10f}\n'.format(tall[i],fout[i],fout_err[i],lcmodel[i]))
 fileout.close()
 plt.errorbar(tall - int(tall[0]),fout,yerr=fout_err,fmt='.')
+plt.plot(tall - int(tall[0]),lcmodel,'r-')
 plt.xlabel('Time (BJD - '+str(int(tall[0]))+')')
 plt.ylabel('Relative flux')
 plt.show()
